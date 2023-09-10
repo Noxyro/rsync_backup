@@ -2,19 +2,41 @@
 
 ########################################
 ####                                ####
-####   Written by Noxyro (C) 2019   ####
-####      https://elodrias.de/      ####
+####   Written by Noxyro (C) 2023   ####
+####        https://noxy.ro         ####
 ####                                ####
-####         Version 1.0.0          ####
+####         Version 1.0.1          ####
 ####                                ####
 ########################################
+
+########################################
+# CURRENT STATE OF THIS SCRIPT:        #
+# ------------------------------------ #
+# This script was written in 2019 as a #
+# personal little wrapper to utilize   #
+# rsync for backups easier.            #
+# Most of this script is "dirty" and   #
+# unpolished for actual public use.    #
+# Many things are unfinished.          #
+# Do expect possible errors due to     #
+# small bugs or other oversights that  #
+# have not been spotted and fixed yet. #
+########################################
+
+# TODO: Remote shell works now, how about actually backing up there with that?
+# TODO: Don't forget about implementing remote to remote backups - this one will be useful!
+# TODO: Link destinations seem to be broken now ... needs a fix?
+# TODO: Implement more parameters to give a command line control without dialogs
+# TODO: Using ssh daemon also needs implementing later on
+# TODO: Actually include the given rsync / ssh parameters as functionality of the backups
 
 
 #### VARIABLES START ####
 
-CURRENT_DATE=$(date +'%Y_%m_%d')
+# VARIABLE (These can be changed!)
 LATEST_EXTENSION=".latest"
 
+# STATIC (Do not change!)
 BACKUP_MODE=0x0000
 BACKUP_MODE_FULL_NEW=0x0001
 BACKUP_MODE_INCREMENTAL=0x0002
@@ -25,6 +47,8 @@ BACKUP_MODE_REMOTE_SOURCE_DAEMON=0x0020
 BACKUP_MODE_REMOTE_DESTINATION=0x0040
 BACKUP_MODE_REMOTE_DESTINATION_DAEMON=0x0080
 
+# INIT (Do not change!)
+CURRENT_DATE=$(date +'%Y_%m_%d')
 RELATIVE_LINK_DESTINATION=""
 FORCE_MODE=0
 AUTO_CORRECT=0
@@ -35,6 +59,21 @@ VERBOSE=0
 
 #### FUNCTIONS START ####
 
+# Checks if the given value or any of the given values is empty / an empty string
+function is_empty() {
+    if (( $# == 0 )); then exit 1; fi
+    if (( $# == 1 )); then
+      if [[ -z ${1} || "${1}" == "" ]]; then return 0; else return 1; fi
+    else
+      for arg in "${@}"; do
+        if [[ -z ${arg} || "${arg}" == "" ]]; then return 0; fi
+      done
+    fi
+
+    return 1
+}
+
+# Detects the remote pattern used or in other words what parts are included and how they are structured
 function get_remote_pattern_type() {
   case $1 in
     rsync://*@*:*/*) echo 6; return;;
@@ -47,14 +86,15 @@ function get_remote_pattern_type() {
   esac
 }
 
+# Runs the remote shell command with the given parameters
 function run_remote_shell_command() {
     case $# in
     2)
-      ssh -i "***REMOVED***" "${2}" "${1}";;
+      return "$(ssh -i "${IDENTIFICATION_FILE}" "${2}" "${1}")";;
     3)
-      ssh -i "***REMOVED***" -l "${3}" "${2}" "${1}";;
+      return "$(ssh -i "${IDENTIFICATION_FILE}" -l "${3}" "${2}" "${1}")";;
     4)
-      ssh -i "***REMOVED***" -p "${4}" -l "${3}" "${2}" "${1}";;
+      return "$(ssh -i "${IDENTIFICATION_FILE}" -p "${4}" -l "${3}" "${2}" "${1}")";;
     *)
       return 1
   esac
@@ -77,25 +117,16 @@ function get_last_sorted_by_time() {
 }
 
 function find_remote_directories_by_name_with_time_prefix() {
-  case $# in
-    3)
-      ssh -i "***REMOVED***" "${3}" "find ${1} -maxdepth 1 -type d -name ${2} -printf \"%T@ %p\n\"";;
-    4)
-      ssh -i "***REMOVED***" -l "${4}" "${3}" "find ${1} -maxdepth 1 -type d -name ${2} -printf \"%T@ %p\n\"";;
-    5)
-      ssh -i "***REMOVED***" -p "${5}" -l "${4}" "${3}" "find ${1} -maxdepth 1 -type d -name ${2} -printf \"%T@ %p\n\"";;
-    *)
-      echo "-1"
-  esac
+  return "$(run_remote_shell_command "find ${1} -maxdepth 1 -type d -name ${2} -printf \"%T@ %p\n\"" "${@}")"
 }
 
 function find_latest_directory_with_name() {
-  find "${DESTINATION}" -maxdepth 1 -type d -name "${NAME}*" -printf "%T@ %p\n" | sort -n | cut -d' ' -f 2- | tail -n 1
+  find_directories_by_name_with_time_prefix "${DESTINATION}" "${NAME}" | get_last_sorted_by_time
 }
 
 function confirm_backup_location() {
   echo "Contents of \"${1}\" will now be backed up to \"${2}\" using \"${3}\" as link destination"
-	read -r -p "Continue? (Y/N): " CONFIRM_BACKUP && [[ $CONFIRM_BACKUP == [yY] || $CONFIRM_BACKUP == [yY][eE][sS] ]] || exit 1
+	read -rp "Continue? (Y/N): " CONFIRM_BACKUP && [[ $CONFIRM_BACKUP == [yY] || $CONFIRM_BACKUP == [yY][eE][sS] ]] || exit 1
 }
 
 function rename_old() {
@@ -203,19 +234,19 @@ function extract_value_from_line() {
 
 while test $# -gt 0; do
   PARAMS_COUNT=$#
-  case "$1" in
+  case "${1}" in
     -h|--help)
       echo "command [options] [name@host:]source [name@host:]destination name"
       echo " "
       echo "options:"
-      echo "-a, --auto-correct        enables rsync specific path auto-correction"
-      echo "-h, --help                show brief help"
-      echo "-e EXTENSION              specify an extension used by the last full backup"
-      echo "-f, --force               enables force mode, which auto-accepts all dialogs"
-      echo "-i FILE                   specify an identification file for remote connections"
-      echo "--rsync-params=\"PARAMS\" specify additional rsync parameters passed to all internal calls"
-      echo "--ssh-params=\"PARAMS\"   specify additional ssh parameters passed to all internal calls"
-      echo "-v, --verbose             shows more verbose command output"
+      echo "-a, --auto-correct          enables rsync specific path auto-correction"
+      echo "-h, --help                  show brief help"
+      echo "-e <EXTENSION>, --extension <EXTENSION>              specify an extension used by the last full backup"
+      echo "-f, --force                 enables force mode, which auto-accepts all dialogs"
+      echo "-i <FILE>, --identity <FILE>                   specify an identification file for remote connections"
+      echo "--rsync-params=\"<PARAMS>\"   specify additional rsync parameters passed to all internal calls"
+      echo "--ssh-params=\"<PARAMS>\"     specify additional ssh parameters passed to all internal calls"
+      echo "-v, --verbose               shows more verbose command output"
       exit 0
       ;;
     -a|--auto-correct)
@@ -224,7 +255,7 @@ while test $# -gt 0; do
       shift; if test $# -gt 0; then LATEST_EXTENSION=${1}; else echo "no extension specified"; exit 1; fi; shift;;
     -f|--force)
       shift; FORCE_MODE=1;;
-    -i)
+    -i|--identity)
       shift; if test $# -gt 0; then IDENTIFICATION_FILE=${1}; else echo "no identification file specified"; exit 1; fi; shift;;
     --rsync-params=*)
       shift; RSYNC_PARAMETERS=$(echo "${1}" | cut -d '=' -f 2-); shift;;
@@ -233,9 +264,9 @@ while test $# -gt 0; do
     -v|--verbose)
       shift; VERBOSE=1;;
     *)
-      if [[ -z ${SOURCE} ]]; then SOURCE=${1}; fi; shift
-      if [[ -z ${DESTINATION} ]]; then DESTINATION=${1}; fi; shift
-      if [[ -z ${NAME} ]]; then NAME=${1}; fi; shift
+      if is_empty "${SOURCE}"; then SOURCE=${1}; fi; shift
+      if is_empty "${DESTINATION}"; then DESTINATION=${1}; fi; shift
+      if is_empty "${NAME}"; then NAME=${1}; fi; shift
   esac
 done
 
@@ -245,14 +276,14 @@ done
 #### SCRIPT START ####
 
 if [[ ${PARAMS_COUNT} -eq 0 ]]; then
-  read -r -e -p "Enter source for backup: " SOURCE
-  read -r -e -p "Enter destination for backup: " DESTINATION
-  read -r -e -p "Enter backup name: " NAME
+  read -rep "Enter source for backup: " SOURCE
+  read -rep "Enter destination for backup: " DESTINATION
+  read -rep "Enter backup name: " NAME
 fi
 
-if [[ -z ${SOURCE} ]]; then echo "Error: no source specified"; exit 1; fi
-if [[ -z ${DESTINATION} ]]; then echo "Error: no destination specified"; exit 1; fi
-if [[ -z ${NAME} ]]; then echo "Error: no NAME specified"; exit 1; fi
+if is_empty "${SOURCE}"; then echo "Error: no source specified"; exit 1; fi
+if is_empty "${DESTINATION}"; then echo "Error: no destination specified"; exit 1; fi
+if is_empty "${NAME}"; then echo "Error: no name specified"; exit 1; fi
 
 # Auto-correcting paths
 if [[ $AUTO_CORRECT -eq 1 ]]; then
@@ -265,14 +296,14 @@ if [[ $AUTO_CORRECT -eq 1 ]]; then
   fi
 fi
 
-# Extracting remote source informations
+# Extracting remote source information
 case $(get_remote_pattern_type "${SOURCE}") in
   [1-2]) REMOTE_SOURCE_INFO=$(extract_remote_info "${SOURCE}");;
   [3-6]) REMOTE_SOURCE_INFO=$(extract_remote_daemon_info "${SOURCE}");;
   *) ;;
 esac
 
-if [[ -n ${REMOTE_SOURCE_INFO} ]]; then
+if ! is_empty "${REMOTE_SOURCE_INFO}"; then
   BACKUP_MODE=$((BACKUP_MODE | BACKUP_MODE_REMOTE_SOURCE))
 
   REMOTE_SOURCE_PATH=$(extract_value_from_line "${REMOTE_SOURCE_INFO}" 1)
@@ -281,14 +312,14 @@ if [[ -n ${REMOTE_SOURCE_INFO} ]]; then
   REMOTE_SOURCE_PORT=$(extract_value_from_line "${REMOTE_SOURCE_INFO}" 4)
 fi
 
-# Extracting remote destination informations
+# Extracting remote destination information
 case $(get_remote_pattern_type "${DESTINATION}") in
   [1-2]) REMOTE_DESTINATION_INFO=$(extract_remote_info "${DESTINATION}");;
   [3-6]) REMOTE_DESTINATION_INFO=$(extract_remote_daemon_info "${DESTINATION}");;
   *) ;;
 esac
 
-if [[ -n ${REMOTE_DESTINATION_INFO} ]]; then
+if ! is_empty "${REMOTE_DESTINATION_INFO}"; then
   BACKUP_MODE=$((BACKUP_MODE | BACKUP_MODE_REMOTE_DESTINATION))
 
   REMOTE_DESTINATION_PATH=$(extract_value_from_line "${REMOTE_DESTINATION_INFO}" 1)
@@ -305,7 +336,7 @@ fi
 
 if [[ VERBOSE -eq 1 ]]; then echo "Checking for previous backups ..."; fi
 
-# Remote destination directory checks
+# Remote source directory checks
 if [[ $((BACKUP_MODE & BACKUP_MODE_REMOTE_SOURCE)) != 0 ]]; then
   if ! run_remote_shell_command "[ -d ${REMOTE_SOURCE_PATH} ]" "${REMOTE_SOURCE_HOST}" "${REMOTE_SOURCE_USER}"; then
     echo "Error: remote source directory \"${REMOTE_SOURCE_PATH}\" does not exist"
@@ -331,7 +362,7 @@ if [[ ${REMOTE_DESTINATION_FIND_EXIT_CODE} -eq 1 || ${DESTINATION_MISSING} -eq 1
     if [[ ${FORCE_MODE} == 1 ]]; then
       CONFIRM_DIRECTORY="Y"
     else
-      read -r -p "Create destination directory and parent directories? (Y/N) " CONFIRM_DIRECTORY
+      read -rp "Create destination directory and parent directories? (Y/N) " CONFIRM_DIRECTORY
     fi
 
     case $CONFIRM_DIRECTORY in
@@ -350,17 +381,8 @@ if [[ ${REMOTE_DESTINATION_FIND_EXIT_CODE} -eq 1 || ${DESTINATION_MISSING} -eq 1
   done
 fi
 
-
-# TODO: Remote shell works now, how about actually backing up there now?
-# TODO: Don't forget about remote to remote backups - this one will be awesome!
-# TODO: Oh and key verification ... we need this
-# TODO: Link destinations seems to be broken now ... needs a fix?
-# TODO: Check for more parameters to give command line control without dialogs
-# TODO: Include given parameters in functionality of backups
-
-
 # Count previous backups
-if [[ -z ${PREVIOUS} ]]; then
+if is_empty "${PREVIOUS}"; then
   PREVIOUS_COUNT=0
 else
   PREVIOUS_COUNT=$(echo "${PREVIOUS}" | wc -l)
@@ -399,7 +421,7 @@ if [[ ${PREVIOUS_COUNT} -gt 0 ]]; then
 	else
     LINK_DESTINATION=$(get_last_sorted_by_time "$(find_lines_by_name "${PREVIOUS_FULL}" "${NAME}*${LATEST_EXTENSION}")")
 
-    if [[ -n $LINK_DESTINATION ]]; then
+    if ! is_empty "${LINK_DESTINATION}"; then
       LINK_DESTINATION=$(get_last_sorted_by_time "${PREVIOUS_FULL}")
     fi
 
@@ -410,7 +432,7 @@ if [[ ${PREVIOUS_COUNT} -gt 0 ]]; then
         if [[ ${FORCE_MODE} == 1 ]]; then
           CONFIRM_DIRECTORY="Y"
         else
-          read -r -p "Continue with latest backup found (Y) or create new full backup (N)? - (Y/N): " CONFIRM_LATEST
+          read -rp "Continue with latest backup found (Y) or create new full backup (N)? - (Y/N): " CONFIRM_LATEST
         fi
 
         case $CONFIRM_LATEST in
